@@ -1,38 +1,69 @@
-### This is for re-using the existing Docker root.
-### Omit to create a local dir (defaults to ./root).
 root_dir: "/meerschaum"
+plugins_dir:
+  - "/meerschaum/plugins"
+  - "/app/plugins"
 
-### All pipes are tagged with the project name
-### (defaults to directory name).
-project_name: "example-project"
+project_name: "clone"
 
-### 1. Module-level `fetch()` (plugin:example)
-### 2. Custom connector `fetch()` (example:secret)
 sync:
   pipes:
-    - connector: "plugin:example"
-      metric: "foo"
-      location: "bar"
-      parameters:
+
+    - connector: "plugin:stress"
+      metric: "test"
+      columns:
         datetime: "timestamp"
         id: "id"
 
-    - connector: "example:secret"
-      metric: "foo"
-      location: "bar"
-      parameters:
+    - connector: "plugin:noaa"
+      metric: "weather"
+      columns:
         datetime: "timestamp"
-        id: "id"
+        station: "station"
+      parameters:
+        noaa:
+          stations:
+            - "KGMU"
+            - "KATL"
+            - "KCLT"
 
-### Define the MRSM_CONFIG for this isolated project.
+    - connector: "plugin:clone"
+      metric: "test"
+      parameters:
+        source:
+          pipe:
+            connector: "plugin:stress"
+            metric: "test"
+          backtrack_minutes: 0
+          chunk_minutes: 10080
+
+    - connector: "plugin:clone"
+      metric: "test"
+      location: "combined"
+      parameters:
+        sources:
+          - pipe:
+              connector: "plugin:stress"
+              metric: "test"
+            chunk_minutes: 10080
+            backtrack_minutes: 0
+          - pipe:
+              connector: "plugin:noaa"
+              metric: "weather"
+            backtrack_minutes: 1440
+            chunk_minutes: 10080
+            params:
+              station:
+                - "_KCLT"
+
+plugins:
+  - "stress"
+  - "noaa"
+
 config:
   meerschaum:
     instance: "sql:main"
     connectors:
       sql:
         main: MRSM{meerschaum:connectors:sql:main}
-      example:
-        secret: MRSM{meerschaum:connectors:example:secret}
 
-### Other environment variables to include (e.g. AWS creds).
 environment: {}
