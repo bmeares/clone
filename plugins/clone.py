@@ -14,7 +14,7 @@ from meerschaum.utils.debug import dprint
 from meerschaum.utils.warnings import warn, info
 from meerschaum.utils.misc import round_time
 
-__version__ = '0.1.0'
+__version__ = '0.1.1'
 
 def register(pipe: mrsm.Pipe) -> Dict[str, Any]:
     """
@@ -79,6 +79,7 @@ def fetch(
         if not src_pipe.exists(debug=debug):
             warn(f"Missing source {src_pipe} (of {pipe}), skipping...", stack=False)
             continue
+        dt_col = src_pipe.columns.get('datetime', None)
 
         pipe.columns.update(src_pipe.columns)
 
@@ -90,7 +91,11 @@ def fetch(
         if isinstance(src_begin, datetime):
             src_begin = round_time(src_begin, timedelta(minutes=chunk_minutes))
 
-        src_end = end or src_pipe.get_sync_time(params=params, debug=debug)
+        src_end = end or (
+            src_pipe.get_sync_time(params=params, debug=debug)
+            if dt_col is not None
+            else None
+        )
         if src_end is not None:
             src_end = apply_backtrack_minutes(src_end, -1)
         if isinstance(src_end, datetime):
@@ -101,9 +106,11 @@ def fetch(
             begin = src_begin,
             end = src_end,
             chunk_interval = get_chunk_interval(src_pipe, chunk_minutes),
-            as_iterator = True,
+            as_iterator = (dt_col is not None),
             debug = debug,
         )
+        if dt_col is None:
+            chunks = [chunks]
         for chunk in chunks:
             chunk['__connector_keys'] = str(src_pipe.connector_keys)
             chunk['__metric_key']     = str(src_pipe.metric_key)
@@ -135,6 +142,9 @@ def get_source_begin(
     A `datetime` or `int` timestamp from which to begin syncing.
     There is a possibility of `None` if the source pipe does not exist.
     """
+    dt_col = pipe.columns.get('datetime', None)
+    if dt_col is None:
+        return None
     return (
         pipe.get_sync_time(
             params = {
