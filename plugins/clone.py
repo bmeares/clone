@@ -7,6 +7,7 @@ Clone the contents of a source pipe into a new target.
 """
 
 import json
+import copy
 from datetime import datetime, timedelta
 from typing import Any, Iterator, Dict, Optional, Union
 import meerschaum as mrsm
@@ -14,7 +15,7 @@ from meerschaum.utils.debug import dprint
 from meerschaum.utils.warnings import warn, info
 from meerschaum.utils.misc import round_time
 
-__version__ = '0.1.1'
+__version__ = '0.1.2'
 
 def register(pipe: mrsm.Pipe) -> Dict[str, Any]:
     """
@@ -83,9 +84,18 @@ def fetch(
 
         pipe.columns.update(src_pipe.columns)
 
+        skip_pipe_keys = source.get('skip_pipe_keys', False)
+        select_columns = source.get('select_columns', None)
+        omit_columns = source.get('omit_columns', None)
         backtrack_minutes = source.get('backtrack_minutes', 1440)
         chunk_minutes = source.get('chunk_minutes', 1440)
-        src_begin = begin or get_source_begin(pipe, src_pipe, debug=debug)
+        src_begin = begin or get_source_begin(
+            pipe,
+            src_pipe,
+            params = params,
+            skip_pipe_keys = skip_pipe_keys,
+            debug = debug,
+        )
         if not begin and src_begin is not None:
             src_begin = apply_backtrack_minutes(src_begin, backtrack_minutes)
         if isinstance(src_begin, datetime):
@@ -102,6 +112,8 @@ def fetch(
             src_end = round_time(src_end, timedelta(minutes=chunk_minutes), to='up')
 
         chunks = src_pipe.get_data(
+            select_columns = select_columns,
+            omit_columns = omit_columns,
             params = params,
             begin = src_begin,
             end = src_end,
@@ -112,10 +124,11 @@ def fetch(
         if dt_col is None:
             chunks = [chunks]
         for chunk in chunks:
-            chunk['__connector_keys'] = str(src_pipe.connector_keys)
-            chunk['__metric_key']     = str(src_pipe.metric_key)
-            chunk['__location_key']   = str(src_pipe.location_key)
-            chunk['__instance_keys']  = str(src_pipe.instance_keys)
+            if not skip_pipe_keys:
+                chunk['__connector_keys'] = str(src_pipe.connector_keys)
+                chunk['__metric_key']     = str(src_pipe.metric_key)
+                chunk['__location_key']   = str(src_pipe.location_key)
+                chunk['__instance_keys']  = str(src_pipe.instance_keys)
 
             if not chunk.empty:
                 yield chunk
@@ -124,6 +137,8 @@ def fetch(
 def get_source_begin(
         pipe: mrsm.Pipe,
         src_pipe: mrsm.Pipe,
+        params: Optional[Dict[str, Any]] = None,
+        skip_pipe_keys: bool = False,
         debug: bool = False,
     ) -> Union[datetime, int, None]:
     """
@@ -137,6 +152,12 @@ def get_source_begin(
     source_pipe: mrsm.Pipe
         The source pipe from which to fetch data.
 
+    params: Optional[Dict[str, Any]], default None
+        Parameter-level parameters to search against the source pipe.
+
+    skip_pipe_keys: bool, default False
+        If `True`, do not include source-pipes' keys in the query.
+
     Returns
     -------
     A `datetime` or `int` timestamp from which to begin syncing.
@@ -145,18 +166,19 @@ def get_source_begin(
     dt_col = pipe.columns.get('datetime', None)
     if dt_col is None:
         return None
+    src_params = copy.deepcopy((params or {}))
+    dest_params = copy.deepcopy(src_params)
+    if not skip_pipe_keys:
+        dest_params.update({
+            '__connector_keys': str(src_pipe.connector_keys),
+            '__metric_key'    : str(src_pipe.metric_key),
+            '__location_key'  : str(src_pipe.location_key),
+            '__instance_keys' : str(src_pipe.instance_keys),
+        })
     return (
-        pipe.get_sync_time(
-            params = {
-                '__connector_keys': str(src_pipe.connector_keys),
-                '__metric_key'    : str(src_pipe.metric_key),
-                '__location_key'  : str(src_pipe.location_key),
-                '__instance_keys' : str(src_pipe.instance_keys),
-            },
-            debug = debug,
-        )
+        pipe.get_sync_time(params=dest_params, debug=debug)
         or
-        src_pipe.get_sync_time(newest=False, debug=debug)
+        src_pipe.get_sync_time(newest=False, params=src_params, debug=debug)
     )
 
 
