@@ -15,7 +15,7 @@ from meerschaum.utils.debug import dprint
 from meerschaum.utils.warnings import warn, info
 from meerschaum.utils.misc import round_time
 
-__version__ = '0.1.2'
+__version__ = '0.1.3'
 
 def register(pipe: mrsm.Pipe) -> Dict[str, Any]:
     """
@@ -64,12 +64,14 @@ def fetch(
     if not sources or not any(sources):
         raise Exception(f"Missing source for {pipe}.")
 
-    pipe.columns.update({
-        '__connector_keys': '__connector_keys',
-        '__metric_key'    : '__metric_key',
-        '__location_key'  : '__location_key',
-        '__instance_keys' : '__instance_keys',
-    })
+    skip_pipe_keys = sources[0].get('skip_pipe_keys', False)
+    if not skip_pipe_keys:
+        pipe.columns.update({
+            '__connector_keys': '__connector_keys',
+            '__metric_key'    : '__metric_key',
+            '__location_key'  : '__location_key',
+            '__instance_keys' : '__instance_keys',
+        })
 
     for source in sources:
         if 'pipe' not in source:
@@ -84,7 +86,6 @@ def fetch(
 
         pipe.columns.update(src_pipe.columns)
 
-        skip_pipe_keys = source.get('skip_pipe_keys', False)
         select_columns = source.get('select_columns', None)
         omit_columns = source.get('omit_columns', None)
         backtrack_minutes = source.get('backtrack_minutes', 1440)
