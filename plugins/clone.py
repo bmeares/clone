@@ -15,7 +15,7 @@ from meerschaum.utils.debug import dprint
 from meerschaum.utils.warnings import warn, info
 from meerschaum.utils.misc import round_time
 
-__version__ = '0.1.3'
+__version__ = '0.1.4'
 
 def register(pipe: mrsm.Pipe) -> Dict[str, Any]:
     """
@@ -23,23 +23,28 @@ def register(pipe: mrsm.Pipe) -> Dict[str, Any]:
     """
     from meerschaum.utils.interactive import select_pipes
     sources = pipe.parameters.get('sources', [pipe.parameters.get('source'), {}])
+    if sources:
+        return pipe.parameters
+
+    skip_pipe_keys = sources[0].get('skip_pipe_keys', False) if sources else False
     src_pipes = (
         select_pipes()
         if not any(sources)
-        else [mrsm.Pipe(**source['pipe']) for source in sources]
+        else [mrsm.Pipe(**source['pipe']) for source in sources if source]
     )
     columns = {
         '__connector_keys': '__connector_keys',
         '__metric_key'    : '__metric_key',
         '__location_key'  : '__location_key',
         '__instance_keys' : '__instance_keys',
-    }
+    } if not skip_pipe_keys else {}
     for src_pipe in src_pipes:
         columns.update(src_pipe.columns)
     return {
         'sources': [
             {
                 'pipe': src_pipe.meta,
+                'skip_pipe_keys': skip_pipe_keys,
                 'params': {},
                 'chunk_minutes': 1440,
                 'backtrack_minutes': 1440,
@@ -84,10 +89,28 @@ def fetch(
             continue
         dt_col = src_pipe.columns.get('datetime', None)
 
-        pipe.columns.update(src_pipe.columns)
 
         select_columns = source.get('select_columns', None)
         omit_columns = source.get('omit_columns', None)
+        source_index_columns = {
+            col_ix: col
+            for col_ix, col in src_pipe.columns.items()
+        }
+        if select_columns and select_columns not in (['*'], '*'):
+            source_index_columns = {
+                col_ix: col
+                for col_ix, col in source_index_columns.items()
+                if col in select_columns
+            }
+
+        if omit_columns:
+            source_index_columns = {
+                col_ix: col
+                for col_ix, col in source_index_columns.items()
+                if col not in omit_columns
+            }
+
+        pipe.columns.update(source_index_columns)
         backtrack_minutes = source.get('backtrack_minutes', 1440)
         chunk_minutes = source.get('chunk_minutes', 1440)
         src_begin = begin or get_source_begin(
