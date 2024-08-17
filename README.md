@@ -19,60 +19,57 @@ See `mrsm-compose.yaml` for a complete example. In a nutshell, define the source
 Consider the snippet below:
 
 ```yaml
-sync:
-  pipes:
+pipes:
+  - connector: "plugin:noaa"
+    metric: "weather"
+    location: "sc"
+    instance: "sql:local"
+    columns:
+      datetime: "timestamp"
+      station: "station"
+    parameters:
+      stations:
+        - "KGMU"
+        - "KGGE"
+        - "KCEU"
 
-    - connector: "plugin:noaa"
-      metric: "weather"
-      location: "sc"
-      instance: "sql:local"
-      columns:
-        datetime: "timestamp"
-        station: "station"
-      parameters:
-        stations:
-          - "KGMU"
-          - "KGGE"
-          - "KCEU"
+  - connector: "plugin:noaa"
+    metric: "weather"
+    location: "nc"
+    instance: "sql:main"
+    columns:
+      datetime: "timestamp"
+      station: "station"
+    parameters:
+      stations:
+        - "KCLT"
+        - "KRDU"
+        - "KCPC"
 
-    - connector: "plugin:noaa"
-      metric: "weather"
-      location: "nc"
-      instance: "sql:main"
-      columns:
-        datetime: "timestamp"
-        station: "station"
-      parameters:
-        stations:
-          - "KCLT"
-          - "KRDU"
-          - "KCPC"
-
-    - connector: "plugin:clone"
-      metric: "weather"
-      instance: "sql:main"
-      parameters:
-        sources:
-          - pipe:
-              connector: "plugin:noaa"
-              metric: "weather"
-              location: "sc"
-              instance: "sql:local"
-            backtrack_minutes: 1440
-            chunk_minutes: 10080
-            params:
-              stations:
-                - "KGMU"
-          - pipe:
-              connector: "plugin:noaa"
-              metric: "weather"
-              location: "nc"
-              instance: "sql:main"
+  - connector: "plugin:clone"
+    metric: "weather"
+    instance: "sql:main"
+    parameters:
+      sources:
+        - pipe:
+            connector: "plugin:noaa"
+            metric: "weather"
+            location: "sc"
+            instance: "sql:local"
+          backtrack_minutes: 1440
+          chunk_minutes: 10080
+          params:
+            stations:
+              - "KGMU"
+        - pipe:
+            connector: "plugin:noaa"
+            metric: "weather"
+            location: "nc"
+            instance: "sql:main"
             params:
               stations:
                 - "_KRDU"
 ```
-
 In this example, there are two weather pipes: SC and NC. The two pipes are stored separately ― SC's data are stored on `sql:local`, and NC's data are on `sql:main`. The third pipe unions the two tables together into a single table stored on `sql:main`.
 
 Source pipes may be defined in a list under `sources` (example above). You may also define a singoe source pipe under the key `source`.
