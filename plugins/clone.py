@@ -6,16 +6,14 @@
 Clone the contents of a source pipe into a new target.
 """
 
-import json
 import copy
 from datetime import datetime, timedelta
 from typing import Any, Iterator, Dict, Optional, Union
 import meerschaum as mrsm
-from meerschaum.utils.debug import dprint
-from meerschaum.utils.warnings import warn, info
+from meerschaum.utils.warnings import warn
 from meerschaum.utils.misc import round_time
 
-__version__ = '0.1.4'
+__version__ = '0.2.0'
 
 def register(pipe: mrsm.Pipe) -> Dict[str, Any]:
     """
@@ -26,17 +24,19 @@ def register(pipe: mrsm.Pipe) -> Dict[str, Any]:
     if sources:
         return pipe.parameters
 
-    skip_pipe_keys = sources[0].get('skip_pipe_keys', False) if sources else False
+    skip_pipe_keys = sources[0].get('skip_pipe_keys', None) if sources else None
+    if skip_pipe_keys is None:
+        skip_pipe_keys = len(sources) > 1
     src_pipes = (
         select_pipes()
         if not any(sources)
         else [mrsm.Pipe(**source['pipe']) for source in sources if source]
     )
     columns = {
-        '__connector_keys': '__connector_keys',
-        '__metric_key'    : '__metric_key',
-        '__location_key'  : '__location_key',
-        '__instance_keys' : '__instance_keys',
+        'connector_keys': 'connector_keys',
+        'metric_key'    : 'metric_key',
+        'location_key'  : 'location_key',
+        'instance_keys' : 'instance_keys',
     } if not skip_pipe_keys else {}
     for src_pipe in src_pipes:
         columns.update(src_pipe.columns)
@@ -56,39 +56,40 @@ def register(pipe: mrsm.Pipe) -> Dict[str, Any]:
 
 
 def fetch(
-        pipe: mrsm.Pipe,
-        begin: Union[datetime, int, None] = None,
-        end: Union[datetime, int, None] = None,
-        debug: bool = False,
-        **kwargs: Any
-    ) -> Iterator['pd.DataFrame']:
+    pipe: mrsm.Pipe,
+    begin: Union[datetime, int, None] = None,
+    end: Union[datetime, int, None] = None,
+    debug: bool = False,
+    **kwargs: Any
+) -> Iterator['pd.DataFrame']:
     """
     Fetch the contents of the source pipe.
     """
     sources = pipe.parameters.get('sources', [pipe.parameters.get('source', {})])
     if not sources or not any(sources):
-        raise Exception(f"Missing source for {pipe}.")
+        raise ValueError(f"Missing source for {pipe}.")
 
-    skip_pipe_keys = sources[0].get('skip_pipe_keys', False)
+    skip_pipe_keys = sources[0].get('skip_pipe_keys', None)
     if not skip_pipe_keys:
         pipe.columns.update({
-            '__connector_keys': '__connector_keys',
-            '__metric_key'    : '__metric_key',
-            '__location_key'  : '__location_key',
-            '__instance_keys' : '__instance_keys',
+            'connector_keys': 'connector_keys',
+            'metric_key'    : 'metric_key',
+            'location_key'  : 'location_key',
+            'instance_keys' : 'instance_keys',
         })
 
     for source in sources:
         if 'pipe' not in source:
             warn(f"Missing 'pipe' in source for {pipe}, skipping...", stack=False)
             continue
+
         src_pipe = mrsm.Pipe(**source['pipe'])
         params = source.get('params', {})
         if not src_pipe.exists(debug=debug):
             warn(f"Missing source {src_pipe} (of {pipe}), skipping...", stack=False)
             continue
-        dt_col = src_pipe.columns.get('datetime', None)
 
+        dt_col = src_pipe.columns.get('datetime', None)
 
         select_columns = source.get('select_columns', None)
         omit_columns = source.get('omit_columns', None)
@@ -111,8 +112,20 @@ def fetch(
             }
 
         pipe.columns.update(source_index_columns)
-        backtrack_minutes = source.get('backtrack_minutes', 1440)
-        chunk_minutes = source.get('chunk_minutes', 1440)
+        backtrack_minutes = source.get('backtrack_minutes', None)
+        if backtrack_minutes is None:
+            backtrack_interval = src_pipe.get_backtrack_interval()
+            backtrack_minutes = backtrack_interval if isinstance(backtrack_interval, int) else (
+                int(backtrack_interval.total_seconds() / 60)
+            )
+
+        chunk_minutes = source.get('chunk_minutes', None)
+        if chunk_minutes is None:
+            chunk_interval = src_pipe.get_chunk_interval()
+            chunk_minutes = chunk_interval if isinstance(chunk_interval, int) else (
+                int(chunk_interval.total_seconds() / 60)
+            )
+
         src_begin = begin or get_source_begin(
             pipe,
             src_pipe,
@@ -130,10 +143,10 @@ def fetch(
             if dt_col is not None
             else None
         )
-        if src_end is not None:
+        if not end and src_end is not None:
+            if isinstance(src_end, datetime):
+                src_end = round_time(src_end, timedelta(minutes=chunk_minutes), to='up')
             src_end = apply_backtrack_minutes(src_end, -1)
-        if isinstance(src_end, datetime):
-            src_end = round_time(src_end, timedelta(minutes=chunk_minutes), to='up')
 
         chunks = src_pipe.get_data(
             select_columns = select_columns,
@@ -149,22 +162,22 @@ def fetch(
             chunks = [chunks]
         for chunk in chunks:
             if not skip_pipe_keys:
-                chunk['__connector_keys'] = str(src_pipe.connector_keys)
-                chunk['__metric_key']     = str(src_pipe.metric_key)
-                chunk['__location_key']   = str(src_pipe.location_key)
-                chunk['__instance_keys']  = str(src_pipe.instance_keys)
+                chunk['connector_keys'] = str(src_pipe.connector_keys)
+                chunk['metric_key']     = str(src_pipe.metric_key)
+                chunk['location_key']   = str(src_pipe.location_key)
+                chunk['instance_keys']  = str(src_pipe.instance_keys)
 
             if not chunk.empty:
                 yield chunk
 
 
 def get_source_begin(
-        pipe: mrsm.Pipe,
-        src_pipe: mrsm.Pipe,
-        params: Optional[Dict[str, Any]] = None,
-        skip_pipe_keys: bool = False,
-        debug: bool = False,
-    ) -> Union[datetime, int, None]:
+    pipe: mrsm.Pipe,
+    src_pipe: mrsm.Pipe,
+    params: Optional[Dict[str, Any]] = None,
+    skip_pipe_keys: bool = False,
+    debug: bool = False,
+) -> Union[datetime, int, None]:
     """
     If `--begin` is not explicitly stated, determine the beginning timestamp for this source.
 
@@ -190,14 +203,15 @@ def get_source_begin(
     dt_col = pipe.columns.get('datetime', None)
     if dt_col is None:
         return None
+
     src_params = copy.deepcopy((params or {}))
     dest_params = copy.deepcopy(src_params)
     if not skip_pipe_keys:
         dest_params.update({
-            '__connector_keys': str(src_pipe.connector_keys),
-            '__metric_key'    : str(src_pipe.metric_key),
-            '__location_key'  : str(src_pipe.location_key),
-            '__instance_keys' : str(src_pipe.instance_keys),
+            'connector_keys': str(src_pipe.connector_keys),
+            'metric_key'    : str(src_pipe.metric_key),
+            'location_key'  : str(src_pipe.location_key),
+            'instance_keys' : str(src_pipe.instance_keys),
         })
     return (
         pipe.get_sync_time(params=dest_params, debug=debug)
@@ -207,9 +221,9 @@ def get_source_begin(
 
 
 def apply_backtrack_minutes(
-        timestamp: Union[datetime, int],
-        backtrack_minutes: int,
-    ) -> Union[datetime, int]:
+    timestamp: Union[datetime, int],
+    backtrack_minutes: int,
+) -> Union[datetime, int]:
     """
     Apply the backtrack interval to the given timestamp.
 
